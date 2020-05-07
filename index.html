@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AniList Search</title>
+    <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.10.20/css/jquery.dataTables.css">
+</head>
+<body>
+<div class="token">
+    <textarea class="tokenField"></textarea>
+    <button onclick="token()">Set</button>
+</div>
+
+
+<div class="user">
+    <a href='https://anilist.co/api/v2/oauth/authorize?client_id=3474&response_type=token'>Login with AniList</a>
+</div>
+
+<style>
+    tr:nth-child(even) {
+        background-color: #f2f2f2;
+    }
+</style>
+<div class="missing">
+    <table id="animeTable">
+        <colgroup>
+            <col style="width: 100px">
+            <col style="width: 100px">
+            <col style="width: 100px">
+            <col style="width: 100px">
+            <col style="width: 100px">
+        </colgroup>
+        <thead>
+            <tr>
+                <td></td>
+                <td>ID</td>
+                <td>Title</td>
+                <td>Format</td>
+                <td>Status</td>
+            </tr>
+        </thead>
+        <tbody class="tableBody">
+
+        </tbody>
+    </table>
+</div>
+
+
+<script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+<script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.10.20/js/jquery.dataTables.js"></script>
+<script>
+    $(document).ready(function () {
+
+    })
+</script>
+<script>
+    let accessToken;
+    let userId;
+    let userName;
+    let completedAnime = [];
+    let completedAnimeId = [];
+    let relationList = [];
+    let currentListPage = 1;
+    let missingAnime = [];
+    let missingAnimeId = [];
+
+    function token() {
+        let tokenField = $('.tokenField');
+        accessToken = tokenField.val();
+        tokenField.prop('disabled', true);
+        getUser();
+    }
+
+    function getUser() {
+        let query = `
+                {
+                  Viewer {
+                    id,
+                    name
+                  }
+                }
+            `
+
+        let url = 'https://graphql.anilist.co',
+            options = {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + accessToken,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    query: query
+                })
+            };
+
+
+        fetch(url, options).then(handleUserResponse, handleError);
+    }
+
+    function getUserList() {
+        let query = `
+                {
+                  Page(page: ` + currentListPage + `, perPage: 50) {
+                    pageInfo {
+                      total
+                      perPage
+                      currentPage
+                      lastPage
+                      hasNextPage
+                    }
+                    mediaList(userId: ` + userId + `, status: COMPLETED) {
+                      id
+                      status
+                      media {
+                        id
+                        title {
+                          romaji
+                          english
+                          native
+                          userPreferred
+                        }
+                      }
+                    }
+                  }
+                }
+            `
+
+        let url = 'https://graphql.anilist.co',
+            options = {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + accessToken,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    query: query
+                })
+            };
+
+
+        fetch(url, options).then(handleUserListResponse, handleError);
+    }
+
+    function getRelations() {
+        let query = `
+                {
+                  Page(page: ` + currentListPage + `, perPage: 50) {
+                    pageInfo {
+                      total
+                      hasNextPage
+                    }
+                    media(id_in: [` + completedAnimeId.toString() + `]) {
+                      id
+                      status
+                      title {
+                        romaji
+                        english
+                        native
+                        userPreferred
+                      }
+                      type
+                      relations {
+                          nodes {
+                            id,
+                            type,
+                            format,
+                            coverImage{
+                                medium
+                            },
+                            status,
+                            mediaListEntry {
+                                status
+                            },
+                            title {
+                              romaji
+                              english
+                              native
+                              userPreferred
+                            }
+                          }
+                        }
+                    }
+                  }
+                }
+            `
+
+        let url = 'https://graphql.anilist.co',
+            options = {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + accessToken,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    query: query
+                })
+            };
+
+        fetch(url, options).then(handleAnimeRelationResponse, handleError);
+    }
+
+    function handleAnimeRelationResponse(response) {
+        response.json().then(body => {
+            let lastPage = body.data.Page.pageInfo.hasNextPage;
+            let media = body.data.Page.media;
+
+            $.each(media, function () {
+                $.each(this.relations.nodes, function() {
+                    if (this.type === 'ANIME' && this.mediaListEntry === null) {
+                        relationList.push(this);
+                    }
+                })
+            });
+
+            if (lastPage === true) {
+                currentListPage++;
+                getRelations();
+            } else {
+                searchForMissing();
+            }
+        });
+    }
+    
+    function searchForMissing() {
+        $.each(relationList, function () {
+            let isIncluded = completedAnimeId.includes(this.id);
+            let isIncludedId = missingAnimeId.includes(this.id);
+
+            if(isIncluded === false && isIncludedId === false) {
+                missingAnimeId.push(this.id);
+                missingAnime.push(this);
+            }
+        })
+
+        presentResults()
+    }
+
+    function presentResults() {
+        hideElements()
+
+        $.each(missingAnime, function () {
+            $('.tableBody').append(`
+            <tr>
+                <td><img src="` + this.coverImage.medium + `"></td>
+                <td> <a target="_blank" href="https://anilist.co/anime/` + this.id + `"> ` + this.id + `</a></td>
+                <td>` + this.title.romaji + `</td>
+                <td>` + this.format + `</td>
+                <td>` + this.status + `</td>
+            </tr>
+        `)
+        })
+
+        $('#animeTable').DataTable();
+    }
+
+    function hideElements() {
+        $('.token').hide();
+        $('.user').hide();
+    }
+
+    function handleUserListResponse(response) {
+        response.json().then(body => {
+            let lastPage = body.data.Page.pageInfo.hasNextPage;
+            let mediaList = body.data.Page.mediaList;
+
+            $.each(mediaList, function () {
+                completedAnime.push(this)
+            });
+
+            if (lastPage === true) {
+                currentListPage++;
+                getUserList();
+            } else {
+                $.each(completedAnime, function () {
+                    completedAnimeId.push(this.media.id)
+                });
+
+                currentListPage = 1;
+                getRelations();
+            }
+        });
+    }
+
+    function handleUserResponse(response) {
+        response.json().then(body => {
+            userId = body.data.Viewer.id
+            userName = body.data.Viewer.name
+
+            getUserList();
+            console.log(userId, userName);
+        });
+    }
+
+    function handleError(response) {
+        console.log(response);
+    }
+</script>
+</body>
+</html>
